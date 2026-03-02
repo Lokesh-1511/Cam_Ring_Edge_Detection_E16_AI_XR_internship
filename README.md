@@ -96,7 +96,4 @@ For each processed image, the pipeline saves:
 - Advanced contour validation for partial occlusion cases.
 - Optional report generation for quality-inspection workflows.
 
-## Author
 
-- Name: `<Your Name>`
-- Role: AI/XR Internship Candidate
