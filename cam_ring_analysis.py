@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.signal import medfilt
 
 
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
@@ -286,6 +287,22 @@ def smooth_radius(radius_values: np.ndarray, max_jump: float = 40.0) -> np.ndarr
     return smoothed
 
 
+def adaptive_radius_jump(
+    outer_radius: np.ndarray,
+    jump_scale: float = 0.05,
+    fallback_jump: float = 40.0,
+) -> float:
+    """Compute adaptive radius jump limit from outer radius mean."""
+    finite_outer = outer_radius[np.isfinite(outer_radius)]
+    if finite_outer.size == 0:
+        return fallback_jump
+
+    adaptive_jump = jump_scale * float(np.nanmean(finite_outer))
+    if not np.isfinite(adaptive_jump) or adaptive_jump <= 0:
+        return fallback_jump
+    return adaptive_jump
+
+
 def _circular_median(values: np.ndarray, window: int = 5) -> np.ndarray:
     """Compute circular rolling median for 1D values with odd-sized window."""
     if window < 3:
@@ -362,13 +379,42 @@ def _save_csv(
     inner_radius: np.ndarray,
     outer_radius: np.ndarray,
     thickness: np.ndarray,
+    pixel_to_mm: Optional[float] = None,
 ) -> None:
     """Save angular radii/thickness data to CSV."""
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["angle_deg", "inner_radius", "outer_radius", "thickness"])
-        for angle, inner, outer, thick in zip(angles_deg, inner_radius, outer_radius, thickness):
-            writer.writerow([f"{angle:.3f}", f"{inner:.6f}", f"{outer:.6f}", f"{thick:.6f}"])
+        if pixel_to_mm is None:
+            writer.writerow(["angle_deg", "inner_radius", "outer_radius", "thickness"])
+            for angle, inner, outer, thick in zip(angles_deg, inner_radius, outer_radius, thickness):
+                writer.writerow([f"{angle:.3f}", f"{inner:.6f}", f"{outer:.6f}", f"{thick:.6f}"])
+        else:
+            writer.writerow(
+                [
+                    "angle_deg",
+                    "inner_radius",
+                    "outer_radius",
+                    "thickness",
+                    "inner_radius_mm",
+                    "outer_radius_mm",
+                    "thickness_mm",
+                ]
+            )
+            for angle, inner, outer, thick in zip(angles_deg, inner_radius, outer_radius, thickness):
+                inner_mm = inner * pixel_to_mm
+                outer_mm = outer * pixel_to_mm
+                thick_mm = thick * pixel_to_mm
+                writer.writerow(
+                    [
+                        f"{angle:.3f}",
+                        f"{inner:.6f}",
+                        f"{outer:.6f}",
+                        f"{thick:.6f}",
+                        f"{inner_mm:.6f}",
+                        f"{outer_mm:.6f}",
+                        f"{thick_mm:.6f}",
+                    ]
+                )
 
 
 def visualize_results(
@@ -382,6 +428,7 @@ def visualize_results(
     output_prefix: Path,
     show: bool = False,
     radial_line_step: int = 10,
+    pixel_to_mm: Optional[float] = None,
 ) -> Dict[str, Path]:
     """Create and save overlay visualization and thickness plot."""
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -457,18 +504,25 @@ def visualize_results(
     cv2.imwrite(str(processed_image_path), overlay)
 
     fig, ax = plt.subplots(figsize=(10, 4.5))
-    ax.plot(angles_deg, thickness, color="tab:blue", linewidth=1.5, label="Thickness")
+    if pixel_to_mm is None:
+        thickness_plot_values = thickness
+        thickness_label = "Thickness (pixels)"
+    else:
+        thickness_plot_values = thickness * pixel_to_mm
+        thickness_label = "Thickness (mm)"
+
+    ax.plot(angles_deg, thickness_plot_values, color="tab:blue", linewidth=1.5, label="Thickness")
     ax.set_title("Cam Ring Thickness vs Angle")
     ax.set_xlabel("Angle (deg)")
-    ax.set_ylabel("Thickness (pixels)")
+    ax.set_ylabel(thickness_label)
     ax.set_xlim(0, 360)
     ax.grid(True, alpha=0.3)
 
     if finite_thickness.size > 0:
-        min_idx = int(finite_thickness[np.argmin(thickness[finite_thickness])])
-        max_idx = int(finite_thickness[np.argmax(thickness[finite_thickness])])
-        ax.scatter([angles_deg[min_idx]], [thickness[min_idx]], color="orange", label="Min")
-        ax.scatter([angles_deg[max_idx]], [thickness[max_idx]], color="magenta", label="Max")
+        min_idx = int(finite_thickness[np.argmin(thickness_plot_values[finite_thickness])])
+        max_idx = int(finite_thickness[np.argmax(thickness_plot_values[finite_thickness])])
+        ax.scatter([angles_deg[min_idx]], [thickness_plot_values[min_idx]], color="orange", label="Min")
+        ax.scatter([angles_deg[max_idx]], [thickness_plot_values[max_idx]], color="magenta", label="Max")
 
     ax.legend(loc="best")
     fig.tight_layout()
@@ -488,7 +542,7 @@ def visualize_results(
         plt.close(fig)
 
     csv_path = output_prefix.with_name(f"{output_prefix.name}_thickness.csv")
-    _save_csv(csv_path, angles_deg, inner_radius, outer_radius, thickness)
+    _save_csv(csv_path, angles_deg, inner_radius, outer_radius, thickness, pixel_to_mm=pixel_to_mm)
 
     return {
         "processed_image": processed_image_path,
@@ -519,6 +573,8 @@ def _print_summary(
     thresholds: Tuple[int, int],
     outputs: Dict[str, Path],
     thickness: np.ndarray,
+    used_max_jump: float,
+    pixel_to_mm: Optional[float] = None,
 ) -> None:
     finite = thickness[np.isfinite(thickness)]
     if finite.size:
@@ -531,7 +587,15 @@ def _print_summary(
     print(f"\nProcessed: {image_path.name}")
     print(f"  Center: {center} (method={method})")
     print(f"  Canny thresholds: low={thresholds[0]}, high={thresholds[1]}")
+    print(f"  Radius continuity max jump: {used_max_jump:.3f} px")
     print(f"  Thickness stats (pixels): min={min_t:.3f}, mean={mean_t:.3f}, max={max_t:.3f}")
+    if pixel_to_mm is not None:
+        print(
+            "  Thickness stats (mm): "
+            f"min={min_t * pixel_to_mm:.3f}, "
+            f"mean={mean_t * pixel_to_mm:.3f}, "
+            f"max={max_t * pixel_to_mm:.3f}"
+        )
     print(f"  Outputs:")
     print(f"    - {outputs['processed_image']}")
     print(f"    - {outputs['thickness_plot']}")
@@ -555,7 +619,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--inner-max-ratio", type=float, default=0.55, help="Normalized max radius for inner edge band.")
     parser.add_argument("--outer-min-ratio", type=float, default=0.55, help="Normalized min radius for outer edge band.")
     parser.add_argument("--outer-max-ratio", type=float, default=0.95, help="Normalized max radius for outer edge band.")
-    parser.add_argument("--max-radius-jump", type=float, default=40.0, help="Max allowed radius jump between adjacent angles.")
+    parser.add_argument(
+        "--max-radius-jump",
+        type=float,
+        default=None,
+        help="Fixed max allowed radius jump between adjacent angles. If omitted, adaptive value is used.",
+    )
+    parser.add_argument(
+        "--jump-scale",
+        type=float,
+        default=0.05,
+        help="Adaptive jump scale factor: max_jump = jump_scale * mean(outer_radius).",
+    )
+    parser.add_argument(
+        "--thickness-median-kernel",
+        type=int,
+        default=5,
+        help="Median filter kernel size for thickness smoothing (0 to disable).",
+    )
+    parser.add_argument(
+        "--pixel-to-mm",
+        type=float,
+        default=None,
+        help="Optional scale factor to convert pixels to millimeters.",
+    )
 
     parser.add_argument("--canny-low", type=int, default=None, help="Manual Canny low threshold.")
     parser.add_argument("--canny-high", type=int, default=None, help="Manual Canny high threshold.")
@@ -638,8 +725,15 @@ def main() -> None:
                 outer_min_ratio=args.outer_min_ratio,
                 outer_max_ratio=args.outer_max_ratio,
             )
-            inner_radius = smooth_radius(inner_radius, max_jump=args.max_radius_jump)
-            outer_radius = smooth_radius(outer_radius, max_jump=args.max_radius_jump)
+
+            used_max_jump = (
+                float(args.max_radius_jump)
+                if args.max_radius_jump is not None
+                else adaptive_radius_jump(outer_radius, jump_scale=args.jump_scale, fallback_jump=40.0)
+            )
+
+            inner_radius = smooth_radius(inner_radius, max_jump=used_max_jump)
+            outer_radius = smooth_radius(outer_radius, max_jump=used_max_jump)
             thickness = compute_thickness(inner_radius, outer_radius)
             if args.despike:
                 thickness = despike_thickness(
@@ -647,6 +741,13 @@ def main() -> None:
                     window=args.despike_window,
                     mad_thresh=args.despike_mad_thresh,
                 )
+
+            if args.thickness_median_kernel > 0:
+                kernel = int(args.thickness_median_kernel)
+                if kernel % 2 == 0:
+                    kernel += 1
+                if kernel >= 3:
+                    thickness = medfilt(thickness, kernel_size=kernel)
 
             output_prefix = args.output_dir / image_path.stem
             outputs = visualize_results(
@@ -660,9 +761,19 @@ def main() -> None:
                 output_prefix,
                 show=args.show,
                 radial_line_step=args.radial_line_step,
+                pixel_to_mm=args.pixel_to_mm,
             )
 
-            _print_summary(image_path, center, method, thresholds, outputs, thickness)
+            _print_summary(
+                image_path,
+                center,
+                method,
+                thresholds,
+                outputs,
+                thickness,
+                used_max_jump=used_max_jump,
+                pixel_to_mm=args.pixel_to_mm,
+            )
             processed_count += 1
         except Exception as exc:
             print(f"\nFailed to process {image_path.name}: {exc}")

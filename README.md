@@ -60,7 +60,8 @@ python cam_ring_analysis.py \
   --inner-max-ratio 0.55 \
   --outer-min-ratio 0.55 \
   --outer-max-ratio 0.95 \
-  --max-radius-jump 40
+  --jump-scale 0.05 \
+  --thickness-median-kernel 5
 ```
 
 Manual Canny thresholds:
@@ -68,6 +69,18 @@ Manual Canny thresholds:
 ```bash
 python cam_ring_analysis.py --input-dir . --canny-low 60 --canny-high 180
 ```
+
+Optional pixel-to-mm conversion:
+
+```bash
+python cam_ring_analysis.py --input-dir . --pixel-to-mm 0.02
+```
+
+Notes on new robustness options:
+
+- Adaptive continuity threshold: `max_jump = jump_scale * mean(outer_radius)`.
+- Fixed jump override is still available via `--max-radius-jump`.
+- Median smoothing is enabled by default with kernel `5` and can be disabled with `--thickness-median-kernel 0`.
 
 ## Output Artifacts
 
@@ -80,6 +93,12 @@ For each processed image, the pipeline saves:
   - `inner_radius`
   - `outer_radius`
   - `thickness`
+
+If `--pixel-to-mm` is provided, CSV also includes:
+
+- `inner_radius_mm`
+- `outer_radius_mm`
+- `thickness_mm`
 
 ## Technologies Used
 
