@@ -61,7 +61,13 @@ python cam_ring_analysis.py \
   --outer-min-ratio 0.55 \
   --outer-max-ratio 0.95 \
   --jump-scale 0.05 \
-  --thickness-median-kernel 5
+  --thickness-median-kernel 3
+```
+
+Recommended robust profile:
+
+```bash
+--despike --jump-scale 0.05 --thickness-median-kernel 3
 ```
 
 Manual Canny thresholds:
@@ -80,7 +86,7 @@ Notes on new robustness options:
 
 - Adaptive continuity threshold: `max_jump = jump_scale * mean(outer_radius)`.
 - Fixed jump override is still available via `--max-radius-jump`.
-- Median smoothing is enabled by default with kernel `5` and can be disabled with `--thickness-median-kernel 0`.
+- Median smoothing remains configurable; kernel `3` is the recommended robust profile setting.
 
 ## Output Artifacts
 
