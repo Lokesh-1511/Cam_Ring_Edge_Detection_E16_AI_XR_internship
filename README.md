@@ -89,11 +89,6 @@ For each processed image, the pipeline saves:
 - Matplotlib
 - SciPy
 
-## Future Improvements
 
-- Pixel-to-millimeter calibration with reference scale.
-- Automated parameter optimization across image batches.
-- Advanced contour validation for partial occlusion cases.
-- Optional report generation for quality-inspection workflows.
 
 
